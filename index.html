@@ -519,11 +519,42 @@
             }
 
             .main-content {
-                padding: 20px;
+                padding: 16px;
+                width: 100%;
+                box-sizing: border-box;
+                /* Prevent padding from causing overflow */
+                overflow-x: hidden;
+            }
+
+            .top-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+
+            .breadcrumbs {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .header-actions {
+                flex-wrap: wrap;
+                width: 100%;
+                gap: 8px;
+            }
+
+            .header-actions select,
+            .header-actions button {
+                flex: 1;
+                /* Stretch buttons to be touch-friendly */
+                text-align: center;
+                justify-content: center;
             }
 
             .bento-grid {
                 grid-template-columns: 1fr;
+                gap: 16px;
+                padding-bottom: 24px;
             }
 
             .span-2,
@@ -537,6 +568,8 @@
                 display: block;
                 overflow-x: auto;
                 white-space: nowrap;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                /* Visual cue */
             }
 
             #mobile-menu-btn {
@@ -545,10 +578,6 @@
 
             .header-title h2 {
                 font-size: 1.5rem;
-            }
-
-            .header-actions {
-                flex-wrap: wrap;
             }
         }
     </style>
