@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personal Budget | Space</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="styles.css?v=2">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="logo-area">
+                    <div class="logo-icon">S</div>
+                </div>
+                <span>Space</span>
+            </div>
+            <nav class="side-nav">
+                <div class="nav-item active" onclick="switchTab('dashboard')">
+                    <span class="icon">📊</span>
+                    <span>Dashboard</span>
+                </div>
+                <div class="nav-item" onclick="switchTab('transactions')">
+                    <span class="icon">📝</span>
+                    <span>Transactions</span>
+                </div>
+            </nav>
+            <div class="user-profile" onclick="logout()" style="cursor: pointer;" title="Sign Out">
+                <div class="avatar">N</div>
+                <div style="font-size: 13px; font-weight: 500;">Logout</div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Top Header -->
+            <header class="top-header">
+                <div class="breadcrumbs">
+                    <span class="crumb-text">Space / </span>
+                    <span class="crumb-current">💸 Expense Tracker</span>
+                    <span id="sync-status" style="font-size: 11px; margin-left:12px; font-weight: 500;"></span>
+                </div>
+                <div class="header-actions">
+                    <select id="currency-select" onchange="updateCurrency()" class="pill-outline"
+                        style="margin-right: 8px;">
+                        <option value="USD" selected>USD ($)</option>
+                        <option value="EUR">EUR (€)</option>
+                        <option value="GBP">GBP (£)</option>
+                        <option value="INR">INR (₹)</option>
+                        <option value="CAD">CAD ($)</option>
+                    </select>
+                    <button class="pill-outline" onclick="openCategoryModal()">Manage Categories</button>
+                    <div class="action-separator" style="width: 1px; height: 24px; background: #eee; margin: 0 8px;">
+                    </div>
+                    <button class="btn-primary"
+                        style="background-color: var(--success-color, #00C875); border-color: var(--success-color, #00C875);"
+                        onclick="openModal('Income')">+ Income</button>
+                    <button class="btn-primary" onclick="openModal('Expense')">+ Expense</button>
+                </div>
+            </header>
+
+            <!-- Dashboard View -->
+            <div id="view-dashboard" class="view-section active">
+                <div class="page-controls">
+                    <h2 class="section-title">Dashboard</h2>
+                    <div class="filter-bar" style="align-items: center;">
+                        <select class="pill-outline" id="period-select" onchange="handlePeriodChange()">
+                            <option value="today">Today</option>
+                            <option value="yesterday">Yesterday</option>
+                            <option value="this-week">This Week</option>
+                            <option value="last-week">Last Week</option>
+                            <option value="this-month" selected>This Month</option>
+                            <option value="last-month">Last Month</option>
+                            <option value="this-year">This Year</option>
+                            <option value="last-year">Last Year</option>
+                            <option value="all">All Time</option>
+                            <option value="custom">Custom Range</option>
+                        </select>
+
+                        <!-- Custom Date Inputs (Hidden by default) -->
+                        <div id="custom-date-controls" style="display: none; gap: 8px; align-items: center;">
+                            <input type="date" id="custom-start" class="pill-outline" onchange="renderDashboard()">
+                            <span style="color: var(--text-secondary);">-</span>
+                            <input type="date" id="custom-end" class="pill-outline" onchange="renderDashboard()">
+                        </div>
+                    </div>
+                </div>
+                <!-- BENTO GRID -->
+                <div class="bento-grid">
+                    <!-- Card 1: Cash Flow (Big Number) -->
+                    <div class="bento-card span-2">
+                        <div class="card-header">
+                            <h3>Cash Flow</h3>
+                            <span class="pill-outline" style="font-size: 10px;">This Month</span>
+                        </div>
+                        <div style="display: flex; gap: 20px; align-items: flex-end;">
+                            <div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary);">Income</div>
+                                <div class="big-number" id="total-income"
+                                    style="font-size: 1.8rem; color: var(--success-color);">$0.00</div>
+                            </div>
+                            <div style="height: 40px; width: 1px; background: var(--glass-border);"></div>
+                            <div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary);">Expenses</div>
+                                <div class="big-number" id="total-expenses"
+                                    style="font-size: 1.8rem; color: var(--danger-color);">$0.00</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Card 2: Net Worth / Balance -->
+                    <div class="bento-card span-2">
+                        <div class="card-header">
+                            <h3>Net Balance</h3>
+                            <i class="icon" style="color: var(--accent-color);">Wallet</i>
+                        </div>
+                        <div class="big-number" id="net-balance">$0.00</div>
+                    </div>
+
+                    <!-- Card 3: Spending Trend (Chart) -->
+                    <div class="bento-card span-4 row-2" style="min-height: 300px;">
+                        <div class="card-header">
+                            <h3>Spending Trend</h3>
+                        </div>
+                        <div style="flex: 1; position: relative;">
+                            <canvas id="trendChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Card 4: Top Categories -->
+                    <div class="bento-card span-2" style="min-height: 250px;">
+                        <div class="card-header">
+                            <h3>Top Spending</h3>
+                        </div>
+                        <div style="flex: 1; position: relative;">
+                            <canvas id="categoryChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Card 5: Recent Transactions Mini-List -->
+                    <div class="bento-card span-2">
+                        <div class="card-header">
+                            <h3>Recent Activity</h3>
+                            <button class="pill-outline" onclick="switchTab('transactions')"
+                                style="font-size: 10px;">View All</button>
+                        </div>
+                        <div id="recent-transactions-list" style="display: flex; flex-direction: column; gap: 12px;">
+                            <!-- Injected via JS -->
+                            <div style="color: var(--text-secondary); font-size: 0.9rem;">No recent activity</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transactions View -->
+            <div id="view-transactions" class="view-section" style="display: none;">
+                <div class="page-controls">
+                    <h2 class="section-title">Transactions</h2>
+                </div>
+                <div class="budget-container" id="transactions-container">
+                    <!-- Transactions Table injected here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Category Manager Modal -->
+    <div id="category-modal-overlay" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Manage Categories</h3>
+                <button class="close-btn" onclick="closeCategoryModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group" style="display: flex; gap: 8px;">
+                    <input type="text" id="new-cat-input" placeholder="New Category Name">
+                    <button class="btn-primary" onclick="addCategory()" style="flex-shrink: 0;">Add</button>
+                </div>
+                <div id="category-list" class="category-list">
+                    <!-- Categories injected here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Transaction Modal -->
+    <div id="modal-overlay" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Add New Transaction</h3>
+                <button class="close-btn" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <!-- 1. Category -->
+                <div class="form-group">
+                    <label>Category</label>
+                    <select id="t-category">
+                        <!-- Options injected by JS -->
+                    </select>
+                </div>
+
+                <!-- 2. Amount -->
+                <div class="form-group">
+                    <label>Amount</label>
+                    <input type="number" id="t-amount" placeholder="0.00" step="0.01">
+                </div>
+
+                <!-- 3. Date -->
+                <div class="form-group">
+                    <label>Date</label>
+                    <input type="date" id="t-date">
+                </div>
+
+                <!-- 4. Description -->
+                <div class="form-group">
+                    <label>Description <span
+                            style="font-weight: normal; color: var(--text-secondary);">(Optional)</span></label>
+                    <input type="text" id="t-desc" placeholder="e.g. Coffee">
+                </div>
+
+                <!-- 5. Vendor (Optional/Conditional) -->
+                <div class="form-group" id="vendor-group">
+                    <label>Vendor / Payer</label>
+                    <input type="text" id="t-vendor" placeholder="e.g. Starbucks or Employer Name">
+                </div>
+
+                <input type="hidden" id="t-type-hidden" value="Expense">
+            </div>
+            <div class="modal-footer">
+                <button class="pill-outline" onclick="closeModal()">Cancel</button>
+                <button class="btn-primary" onclick="addTransaction()">Save Transaction</button>
+            </div>
+        </div>
+    </div>
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <!-- LOGIN / SIGNUP SCREEN -->
+    <div id="auth-screen" class="auth-screen">
+        <div class="auth-card">
+            <div class="logo-area" style="margin: 0 auto 24px;">
+                <div class="logo-icon" style="width: 48px; height: 48px; font-size: 20px;">S</div>
+            </div>
+            <h2 id="auth-title">Welcome Back</h2>
+            <p class="auth-sub" id="auth-sub">Enter your details to access your expenses.</p>
+
+            <div class="form-group">
+                <label>Email Address</label>
+                <input type="email" id="auth-email" placeholder="name@example.com">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="auth-password" placeholder="••••••••">
+            </div>
+
+            <button class="btn-primary" style="width: 100%; margin-top: 12px;" id="auth-btn">Sign In</button>
+
+            <p class="auth-switch">
+                <span id="auth-switch-text">Don't have an account?</span>
+                <a href="#" onclick="toggleAuthMode(event)">Sign up</a>
+            </p>
+            <p style="font-size: 11px; color: red; margin-top: 12px; text-align: center; display: none;"
+                id="auth-error"></p>
+        </div>
+    </div>
+    <script src="app.js?v=2"></script>
+</body>
+
+</html>
