@@ -942,13 +942,21 @@
                 alert("Please enter your email address in the field above to reset your password.");
                 return;
             }
+            // Add logging
+            console.log("Initiating password reset for:", email);
+
             auth.sendPasswordResetEmail(email)
                 .then(() => {
-                    alert("Password reset email sent to " + email);
+                    alert("Password reset email sent to " + email + ".\n\nPlease check your Inbox and Spam folder.\n\nNote: If no account exists with this email, for security reasons, no email will be sent.");
                 })
                 .catch((error) => {
                     console.error("Reset Error:", error);
-                    alert("Error: " + error.message);
+                    let msg = error.message;
+                    if (error.code === 'auth/user-not-found') {
+                        // Even if this error is suppressed by Firebase config, we handle it if thrown
+                        msg = "No account found with this email.";
+                    }
+                    alert("Error: " + msg);
                 });
         }
 
