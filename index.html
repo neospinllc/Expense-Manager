@@ -501,6 +501,56 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--text-secondary);
         }
+
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: -280px;
+                top: 0;
+                height: 100%;
+                z-index: 1000;
+                transition: left 0.3s ease;
+                box-shadow: 2px 0 10px rgba(0, 0, 0, 0.5);
+            }
+
+            .sidebar.active {
+                left: 0;
+            }
+
+            .main-content {
+                padding: 20px;
+            }
+
+            .bento-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .span-2,
+            .span-4,
+            .row-2 {
+                grid-column: span 1;
+                grid-row: span 1;
+            }
+
+            .budget-table {
+                display: block;
+                overflow-x: auto;
+                white-space: nowrap;
+            }
+
+            #mobile-menu-btn {
+                display: block !important;
+            }
+
+            .header-title h2 {
+                font-size: 1.5rem;
+            }
+
+            .header-actions {
+                flex-wrap: wrap;
+            }
+        }
     </style>
 </head>
 
@@ -538,7 +588,9 @@
         <main class="main-content">
             <!-- Top Header -->
             <header class="top-header">
-                <div class="breadcrumbs">
+                <div class="breadcrumbs" style="display: flex; align-items: center;">
+                    <button id="mobile-menu-btn" onclick="toggleSidebar()"
+                        style="display: none; background: none; border: none; color: var(--text-primary); font-size: 24px; margin-right: 12px; cursor: pointer;">☰</button>
                     <span class="crumb-text">Space / </span>
                     <span class="crumb-current">💸 Expense Tracker</span>
                     <span id="sync-status" style="font-size: 11px; margin-left:12px; font-weight: 500;"></span>
@@ -1124,8 +1176,8 @@
 
             console.log("Setting up App for user:", currentUser.uid);
 
-            // Admin Check
-            const isAdmin = currentUser.email === 'devsrihari@gmail.com';
+            // Admin Check (Case Insensitive)
+            const isAdmin = currentUser.email.toLowerCase() === 'devsrihari@gmail.com';
             const adminNav = document.getElementById('nav-admin');
             if (adminNav) {
                 adminNav.style.display = isAdmin ? 'flex' : 'none';
@@ -1275,13 +1327,44 @@
         }
 
         // --- Navigation ---
+        let isSidebarOpen = false;
+        function toggleSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            isSidebarOpen = !isSidebarOpen;
+            if (isSidebarOpen) sidebar.classList.add('active');
+            else sidebar.classList.remove('active');
+
+            if (isSidebarOpen) {
+                document.addEventListener('click', closeSidebarOnClickOutside);
+            } else {
+                document.removeEventListener('click', closeSidebarOnClickOutside);
+            }
+        }
+
+        function closeSidebarOnClickOutside(e) {
+            const sidebar = document.querySelector('.sidebar');
+            const btn = document.getElementById('mobile-menu-btn');
+            if (sidebar && !sidebar.contains(e.target) && btn && !btn.contains(e.target)) {
+                isSidebarOpen = false;
+                sidebar.classList.remove('active');
+                document.removeEventListener('click', closeSidebarOnClickOutside);
+            }
+        }
+
         function switchTab(tabId) {
             // Guard: Admin Access
             if (tabId === 'admin') {
-                if (!currentUser || currentUser.email !== 'devsrihari@gmail.com') {
+                if (!currentUser || currentUser.email.toLowerCase() !== 'devsrihari@gmail.com') {
                     alert("Access Denied");
                     return;
                 }
+            }
+
+            // Close sidebar on mobile
+            if (window.innerWidth <= 768) {
+                isSidebarOpen = false;
+                const sidebar = document.querySelector('.sidebar');
+                if (sidebar) sidebar.classList.remove('active');
             }
 
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -1302,8 +1385,8 @@
         async function checkAndCreateUserProfile(user) {
             try {
                 const userDoc = await db.collection('users').doc(user.uid).get();
-                // Enforce Admin Role in DB if email matches
-                const isAdminEmail = user.email === 'devsrihari@gmail.com';
+                // Enforce Admin Role in DB if email matches (Case Insensitive)
+                const isAdminEmail = user.email.toLowerCase() === 'devsrihari@gmail.com';
                 const role = isAdminEmail ? 'admin' : 'user';
 
                 if (!userDoc.exists) {
@@ -1341,8 +1424,12 @@
                     `;
                 }).join('');
             }).catch(err => {
-                console.error("Admin Load Error:", err);
-                document.getElementById('admin-users-list').innerHTML = '<tr><td colspan="4">Failed to load users. Permissions?</td></tr>';
+                console.error("Admin Load Error (Detailed):", err);
+                let msg = "Failed to load users.";
+                if (err.code === 'permission-denied') {
+                    msg = "Permission Denied: Database rules are blocking access. Please update Firestore Rules.";
+                }
+                document.getElementById('admin-users-list').innerHTML = `<tr><td colspan="4" style="color: var(--danger-color);">${msg}</td></tr>`;
             });
         }
 
