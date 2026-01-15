@@ -8,7 +8,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Export Libraries -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
     <style>
         :root {
             /* Premium "Midnight" Palette */
@@ -669,8 +674,11 @@
                             <span style="color: var(--text-secondary);">-</span>
                             <input type="date" id="tx-custom-end" class="pill-outline" onchange="renderTransactions()">
                         </div>
-                        <button class="btn-primary" onclick="exportToCSV()" style="margin-left: auto;">Export
-                            CSV</button>
+                        <div style="margin-left: auto; display: flex; gap: 8px;">
+                            <button class="pill-outline" onclick="exportToCSV()" title="Export CSV">CSV</button>
+                            <button class="pill-outline" onclick="exportToExcel()" title="Export Excel">Excel</button>
+                            <button class="pill-outline" onclick="exportToPDF()" title="Export PDF">PDF</button>
+                        </div>
                     </div>
                 </div>
                 <div class="budget-container" id="transactions-container">
@@ -1379,6 +1387,103 @@
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+        }
+
+        function exportToExcel() {
+            const period = document.getElementById('tx-period-select').value;
+            const startVal = document.getElementById('tx-custom-start').value;
+            const endVal = document.getElementById('tx-custom-end').value;
+            const data = getFilteredTransactions(period, startVal, endVal);
+
+            if (!data.length) {
+                alert("No transactions to export.");
+                return;
+            }
+
+            // Prepare data for Sheet
+            const rows = data.map(tx => ({
+                Date: tx.date,
+                Description: tx.desc,
+                Vendor: tx.vendor || '',
+                Category: tx.category,
+                Type: tx.type,
+                Amount: tx.type === 'Expense' ? -tx.amount : tx.amount
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(rows);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+
+            const filename = `transactions_${period}_${new Date().toISOString().split('T')[0]}.xlsx`;
+            XLSX.writeFile(wb, filename);
+        }
+
+        function exportToPDF() {
+            const period = document.getElementById('tx-period-select').value;
+            const startVal = document.getElementById('tx-custom-start').value;
+            const endVal = document.getElementById('tx-custom-end').value;
+            const data = getFilteredTransactions(period, startVal, endVal);
+
+            if (!data.length) {
+                alert("No transactions to export.");
+                return;
+            }
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+
+            // Title
+            doc.setFontSize(18);
+            doc.text("Expense Tracker Report", 14, 22);
+
+            doc.setFontSize(11);
+            doc.setTextColor(100);
+            doc.text(`Period: ${period} | Exported: ${new Date().toLocaleDateString()}`, 14, 30);
+
+            // Calculate Totals for Summary
+            const totalIncome = data.filter(t => t.type === 'Income').reduce((s, t) => s + t.amount, 0);
+            const totalExpense = data.filter(t => t.type === 'Expense').reduce((s, t) => s + t.amount, 0);
+            const net = totalIncome - totalExpense;
+
+            const summary = [
+                ['Total Income', formatMoney(totalIncome)],
+                ['Total Expenses', formatMoney(totalExpense)],
+                ['Net Balance', formatMoney(net)]
+            ];
+
+            // Summary Table
+            doc.autoTable({
+                startY: 35,
+                head: [['Summary', 'Amount']],
+                body: summary,
+                theme: 'plain',
+                styles: { fontSize: 10, cellPadding: 2 },
+                columnStyles: { 1: { halign: 'right' } },
+                margin: { left: 14, right: 100 } // Limit width
+            });
+
+            // Transactions Table
+            const tableBody = data.map(tx => [
+                tx.date,
+                tx.desc,
+                tx.vendor || '-',
+                tx.category,
+                tx.type,
+                (tx.type === 'Expense' ? '-' : '+') + ' ' + formatMoney(tx.amount)
+            ]);
+
+            doc.autoTable({
+                startY: doc.lastAutoTable.finalY + 10,
+                head: [['Date', 'Description', 'Vendor', 'Category', 'Type', 'Amount']],
+                body: tableBody,
+                theme: 'striped',
+                headStyles: { fillColor: [59, 130, 246] }, // Accent blue
+                styles: { fontSize: 9 },
+                columnStyles: { 5: { halign: 'right' } }
+            });
+
+            const filename = `report_${period}_${new Date().toISOString().split('T')[0]}.pdf`;
+            doc.save(filename);
         }
 
         // --- Dashboard & Charts (Same as before, just using new data source) ---
