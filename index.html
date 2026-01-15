@@ -523,6 +523,10 @@
                     <span class="icon">📝</span>
                     <span>Transactions</span>
                 </div>
+                <div class="nav-item" id="nav-admin" onclick="switchTab('admin')" style="display: none;">
+                    <span class="icon">👥</span>
+                    <span>Admin</span>
+                </div>
             </nav>
             <div class="user-profile" onclick="logout()" style="cursor: pointer;" title="Sign Out">
                 <div class="avatar">N</div>
@@ -685,6 +689,41 @@
                     <!-- Transactions Table injected here -->
                 </div>
             </div>
+
+            <!-- Admin View -->
+            <div id="view-admin" class="view-section" style="display: none;">
+                <div class="page-controls">
+                    <h2 class="section-title">Admin Dashboard</h2>
+                </div>
+
+                <div class="bento-grid">
+                    <!-- Total Users Card -->
+                    <div class="bento-card span-2">
+                        <div class="card-header">
+                            <h3>Total Users</h3>
+                            <i class="icon" style="color: var(--accent-color);">👥</i>
+                        </div>
+                        <div class="big-number" id="admin-total-users">0</div>
+                    </div>
+                </div>
+
+                <div class="budget-container" style="margin-top: 24px;">
+                    <h3 style="margin-bottom: 16px; color: var(--text-secondary);">Registered Users</h3>
+                    <table class="budget-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Joined Date</th>
+                                <th>Role</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-users-list">
+                            <!-- Users injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </main>
     </div>
 
@@ -770,6 +809,10 @@
             <h2 id="auth-title">Welcome Back</h2>
             <p class="auth-sub" id="auth-sub">Enter your details to access your expenses.</p>
 
+            <div class="form-group" id="auth-name-group" style="display: none;">
+                <label>Full Name</label>
+                <input type="text" id="auth-name" placeholder="John Doe">
+            </div>
             <div class="form-group">
                 <label>Email Address</label>
                 <input type="email" id="auth-email" placeholder="name@example.com">
@@ -883,12 +926,14 @@
                 authTitle.innerText = "Create Account";
                 authSub.innerText = "Sign up to start tracking expenses.";
                 authSwitchText.innerText = "Already have an account?";
+                document.getElementById('auth-name-group').style.display = 'block';
                 if (e) e.target.innerText = "Sign in";
             } else {
                 authTitle.innerText = "Welcome Back";
                 // ... text updates ...
                 authSub.innerText = "Enter your details to access your expenses.";
                 authSwitchText.innerText = "Don't have an account?";
+                document.getElementById('auth-name-group').style.display = 'none';
                 if (e) e.target.innerText = "Sign up";
             }
             authError.style.display = 'none';
@@ -908,9 +953,30 @@
             }
 
             try {
-                const action = isSignupMode
-                    ? auth.createUserWithEmailAndPassword(email, pass)
-                    : auth.signInWithEmailAndPassword(email, pass);
+                let action;
+                if (isSignupMode) {
+                    const name = document.getElementById('auth-name').value;
+                    if (!name) {
+                        alert("Please enter your full name.");
+                        return;
+                    }
+                    action = auth.createUserWithEmailAndPassword(email, pass)
+                        .then(cred => {
+                            // Create User Profile in Firestore
+                            const isAdmin = email === 'devsrihari@gmail.com';
+                            return db.collection('users').doc(cred.user.uid).set({
+                                name: name,
+                                email: email,
+                                role: isAdmin ? 'admin' : 'user',
+                                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                            }).then(() => {
+                                // Update Auth Profile
+                                return cred.user.updateProfile({ displayName: name });
+                            });
+                        });
+                } else {
+                    action = auth.signInWithEmailAndPassword(email, pass);
+                }
 
                 action.then(() => {
                     console.log("Auth Success");
@@ -1058,6 +1124,16 @@
 
             console.log("Setting up App for user:", currentUser.uid);
 
+            // Admin Check
+            const isAdmin = currentUser.email === 'devsrihari@gmail.com';
+            const adminNav = document.getElementById('nav-admin');
+            if (adminNav) {
+                adminNav.style.display = isAdmin ? 'flex' : 'none';
+            }
+
+            // Check/Create User Profile (Backfill for old users)
+            checkAndCreateUserProfile(currentUser);
+
             // 1. Listen for Transactions
             unsubscribeTx = db.collection('users').doc(currentUser.uid).collection('transactions')
                 // .orderBy('date', 'desc') // Removed to prevent "Missing Index" errors
@@ -1200,15 +1276,74 @@
 
         // --- Navigation ---
         function switchTab(tabId) {
+            // Guard: Admin Access
+            if (tabId === 'admin') {
+                if (!currentUser || currentUser.email !== 'devsrihari@gmail.com') {
+                    alert("Access Denied");
+                    return;
+                }
+            }
+
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+
             if (tabId === 'dashboard') document.querySelectorAll('.nav-item')[0].classList.add('active');
-            else document.querySelectorAll('.nav-item')[1].classList.add('active');
+            else if (tabId === 'transactions') document.querySelectorAll('.nav-item')[1].classList.add('active');
+            else if (tabId === 'admin') document.getElementById('nav-admin').classList.add('active');
 
             document.querySelectorAll('.view-section').forEach(el => el.style.display = 'none');
             document.getElementById(`view-${tabId}`).style.display = 'block';
 
             if (tabId === 'dashboard') renderDashboard();
-            else renderTransactions();
+            else if (tabId === 'transactions') renderTransactions();
+            else if (tabId === 'admin') renderAdmin();
+        }
+
+        // --- Admin & User Logic ---
+        async function checkAndCreateUserProfile(user) {
+            try {
+                const userDoc = await db.collection('users').doc(user.uid).get();
+                // Enforce Admin Role in DB if email matches
+                const isAdminEmail = user.email === 'devsrihari@gmail.com';
+                const role = isAdminEmail ? 'admin' : 'user';
+
+                if (!userDoc.exists) {
+                    console.log("Creating user profile...");
+                    await db.collection('users').doc(user.uid).set({
+                        name: user.displayName || 'User',
+                        email: user.email,
+                        role: role,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                } else if (isAdminEmail && userDoc.data().role !== 'admin') {
+                    // Auto-promote to admin if email matches but role is wrong
+                    await db.collection('users').doc(user.uid).update({ role: 'admin' });
+                }
+            } catch (e) {
+                console.error("Profile Check Error:", e);
+            }
+        }
+
+        function renderAdmin() {
+            db.collection('users').orderBy('createdAt', 'desc').get().then(snapshot => {
+                const users = snapshot.docs.map(doc => doc.data());
+                document.getElementById('admin-total-users').innerText = users.length;
+
+                const tbody = document.getElementById('admin-users-list');
+                tbody.innerHTML = users.map(u => {
+                    const dateStr = u.createdAt ? new Date(u.createdAt.seconds * 1000).toLocaleDateString() : 'N/A';
+                    return `
+                        <tr>
+                            <td style="font-weight: 500;">${u.name || 'Unknown'}</td>
+                            <td style="color: var(--text-secondary);">${u.email}</td>
+                            <td>${dateStr}</td>
+                            <td><span class="tag ${u.role === 'admin' ? 'Income' : 'Housing'}">${u.role || 'user'}</span></td>
+                        </tr>
+                    `;
+                }).join('');
+            }).catch(err => {
+                console.error("Admin Load Error:", err);
+                document.getElementById('admin-users-list').innerHTML = '<tr><td colspan="4">Failed to load users. Permissions?</td></tr>';
+            });
         }
 
         // --- Modal Handling ---
