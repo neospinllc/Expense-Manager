@@ -650,6 +650,28 @@
             <div id="view-transactions" class="view-section" style="display: none;">
                 <div class="page-controls">
                     <h2 class="section-title">Transactions</h2>
+                    <div class="filter-bar" style="align-items: center; gap: 8px;">
+                        <select class="pill-outline" id="tx-period-select" onchange="renderTransactions()">
+                            <option value="today">Today</option>
+                            <option value="yesterday">Yesterday</option>
+                            <option value="this-week">This Week</option>
+                            <option value="last-week">Last Week</option>
+                            <option value="this-month" selected>This Month</option>
+                            <option value="last-month">Last Month</option>
+                            <option value="this-year">This Year</option>
+                            <option value="last-year">Last Year</option>
+                            <option value="all">All Time</option>
+                            <option value="custom">Custom Range</option>
+                        </select>
+                        <div id="tx-custom-date-controls" style="display: none; gap: 8px; align-items: center;">
+                            <input type="date" id="tx-custom-start" class="pill-outline"
+                                onchange="renderTransactions()">
+                            <span style="color: var(--text-secondary);">-</span>
+                            <input type="date" id="tx-custom-end" class="pill-outline" onchange="renderTransactions()">
+                        </div>
+                        <button class="btn-primary" onclick="exportToCSV()" style="margin-left: auto;">Export
+                            CSV</button>
+                    </div>
                 </div>
                 <div class="budget-container" id="transactions-container">
                     <!-- Transactions Table injected here -->
@@ -747,6 +769,9 @@
             <div class="form-group">
                 <label>Password</label>
                 <input type="password" id="auth-password" placeholder="••••••••">
+                <a href="#" onclick="resetPassword(event)"
+                    style="display: block; text-align: right; margin-top: 8px; font-size: 0.8rem; color: var(--accent-color); text-decoration: none;">Forgot
+                    Password?</a>
             </div>
 
             <button class="btn-primary" style="width: 100%; margin-top: 12px;" id="auth-btn">Sign In</button>
@@ -759,7 +784,814 @@
                 id="auth-error"></p>
         </div>
     </div>
-    <script src="app.js?v=2"></script>
+    <script>
+        // --- Firebase Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyCZ4k67YX3-gPytz0Etl6DDDNoe-mH_Hzg",
+            authDomain: "my-expense-tracker-a542d.firebaseapp.com",
+            projectId: "my-expense-tracker-a542d",
+            storageBucket: "my-expense-tracker-a542d.firebasestorage.app",
+            messagingSenderId: "72579672597",
+            appId: "1:72579672597:web:26c035f9b9c4343932bc1c"
+        };
+
+        // Initialize Firebase
+        // Initialize Firebase
+        try {
+            if (typeof firebase === 'undefined') throw new Error("Firebase SDK not loaded");
+            if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        } catch (e) {
+            alert("Critical Error: " + e.message);
+        }
+
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // --- State ---
+        let transactions = [];
+        let currentUser = null;
+        let unsubscribeTx = null;
+        let isSignupMode = false;
+
+        // --- DOM Elements ---
+        const authScreen = document.getElementById('auth-screen');
+        const authTitle = document.getElementById('auth-title');
+        const authSub = document.getElementById('auth-sub');
+        const authSwitchText = document.getElementById('auth-switch-text');
+        const authError = document.getElementById('auth-error');
+
+        console.log("App.js loading...");
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log("DOM Loaded");
+
+            // Auth Button Listener
+            const btn = document.getElementById('auth-btn');
+            if (btn) {
+                btn.addEventListener('click', handleAuth);
+                console.log("Auth button listener attached");
+            } else {
+                console.error("Auth button not found!");
+            }
+
+            // Save Transaction Listener
+            const saveBtn = document.getElementById('save-tx-btn');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', addTransaction);
+                console.log("Save Transaction listener attached");
+            } else {
+                // It seems the button inside the modal is onclick="addTransaction()", so this listener might be redundant or for a different button if it existed.
+                // The HTML shows <button class="btn-primary" onclick="addTransaction()">Save Transaction</button> inside the modal footer.
+                // So we can ignore the error if this specific ID doesn't exist, as the onclick attribute is present.
+                // console.error("Save Transaction button not found!");
+            }
+
+            // 2. Auth Listener
+            auth.onAuthStateChanged(user => {
+                if (user) {
+                    currentUser = user;
+                    authScreen.style.display = 'none'; // Hide Login
+                    setupApp();
+                } else {
+                    currentUser = null;
+                    authScreen.style.display = 'flex'; // Show Login
+                    transactions = [];
+                    // If already on dashboard, these might fail if DOM not ready, but usually fine
+                    // We can just clear the UI
+                    if (document.getElementById('transactions-container')) renderTransactions();
+                }
+            });
+
+            const dateInput = document.getElementById('t-date');
+            if (dateInput) dateInput.valueAsDate = new Date();
+        });
+
+        // --- Auth Logic ---
+        function toggleAuthMode(e) {
+            if (e) e.preventDefault();
+            isSignupMode = !isSignupMode;
+            if (isSignupMode) {
+                authTitle.innerText = "Create Account";
+                authSub.innerText = "Sign up to start tracking expenses.";
+                authSwitchText.innerText = "Already have an account?";
+                if (e) e.target.innerText = "Sign in";
+            } else {
+                authTitle.innerText = "Welcome Back";
+                // ... text updates ...
+                authSub.innerText = "Enter your details to access your expenses.";
+                authSwitchText.innerText = "Don't have an account?";
+                if (e) e.target.innerText = "Sign up";
+            }
+            authError.style.display = 'none';
+        }
+
+        function handleAuth() {
+            console.log("handleAuth triggered");
+            // alert("Debug: Button Clicked"); // User can uncomment if needed, but let's stick to error alerts mostly to avoid annoyance unless necessary
+
+            const email = document.getElementById('auth-email').value;
+            const pass = document.getElementById('auth-password').value;
+
+            if (!email || !pass) {
+                showAuthError("Please enter email and password.");
+                alert("Please enter email and password.");
+                return;
+            }
+
+            try {
+                const action = isSignupMode
+                    ? auth.createUserWithEmailAndPassword(email, pass)
+                    : auth.signInWithEmailAndPassword(email, pass);
+
+                action.then(() => {
+                    console.log("Auth Success");
+                    // Auth state listener will handle the redirect/UI change
+                }).catch(error => {
+                    console.error("Auth Error:", error);
+                    let msg = error.message;
+                    if (error.code === 'auth/invalid-login-credentials' || error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found') {
+                        msg = "Incorrect user ID or password. Please try again.";
+                    } else if (error.code === 'auth/email-already-in-use') {
+                        msg = "This email is already registered. Please sign in.";
+                    } else if (error.code === 'auth/invalid-email') {
+                        msg = "Please enter a valid email address.";
+                    } else if (error.code === 'auth/weak-password') {
+                        msg = "Password should be at least 6 characters.";
+                    }
+                    showAuthError(msg);
+                    // alert("Error: " + msg); // Removed alert to be less intrusive
+                });
+            } catch (err) {
+                alert("System Error: " + err.message);
+            }
+        }
+
+        function resetPassword(e) {
+            if (e) e.preventDefault();
+            const email = document.getElementById('auth-email').value;
+            if (!email) {
+                alert("Please enter your email address in the field above to reset your password.");
+                return;
+            }
+            auth.sendPasswordResetEmail(email)
+                .then(() => {
+                    alert("Password reset email sent to " + email);
+                })
+                .catch((error) => {
+                    console.error("Reset Error:", error);
+                    alert("Error: " + error.message);
+                });
+        }
+
+        function showAuthError(msg) {
+            authError.innerText = msg;
+            authError.style.display = 'block';
+        }
+
+        function logout() {
+            auth.signOut();
+            location.reload(); // Hard reset
+        }
+
+        // --- Firestore Logic ---
+        // --- Category Management ---
+        let categories = [];
+        let unsubscribeCats = null;
+
+        const defaultCategories = ["Housing", "Food", "Transport", "Leisure", "Travel", "Shopping", "Other"];
+        const incomeCategories = ["Salary", "Dividend", "Rent", "Share Sale", "Gift", "Commission", "Business Payout"];
+
+        function openCategoryModal() {
+            document.getElementById('category-modal-overlay').classList.add('active');
+            renderCategoryList();
+        }
+
+        function closeCategoryModal() {
+            document.getElementById('category-modal-overlay').classList.remove('active');
+        }
+
+        async function addCategory() {
+            const input = document.getElementById('new-cat-input');
+            const name = input.value.trim();
+            if (!name) return;
+
+            if (categories.find(c => c.name.toLowerCase() === name.toLowerCase())) {
+                alert("Category already exists");
+                return;
+            }
+
+            try {
+                await db.collection('users').doc(currentUser.uid).collection('categories').add({
+                    name: name,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                input.value = '';
+            } catch (e) {
+                console.error("Add Cat Error:", e);
+                alert("Failed to add category");
+            }
+        }
+
+        async function deleteCategory(id) {
+            if (!confirm("Delete this category?")) return;
+            try {
+                await db.collection('users').doc(currentUser.uid).collection('categories').doc(id).delete();
+            } catch (e) {
+                console.error("Del Cat Error:", e);
+            }
+        }
+
+        function renderCategoryList() {
+            const container = document.getElementById('category-list');
+            container.innerHTML = categories.map(cat => `
+                <div class="category-tag">
+                    ${cat.name}
+                    <div class="remove-cat" onclick="deleteCategory('${cat.id}')">×</div>
+                </div>
+            `).join('');
+        }
+
+        function renderCategoryDropdown(forcedType = null) {
+            const select = document.getElementById('t-category');
+            if (!select) return;
+
+            // Determine type: argument OR current radio selection
+            let type = forcedType;
+            if (!type) {
+                const checkedRadio = document.querySelector('input[name="t-type"]:checked');
+                type = checkedRadio ? checkedRadio.value : 'Expense';
+            }
+
+            let options = [];
+            if (type === 'Income') {
+                options = incomeCategories;
+            } else {
+                // For expenses, use User Categories (which includes seeded defaults)
+                options = categories.map(c => c.name);
+            }
+
+            select.innerHTML = options.map(name => `<option value="${name}">${name}</option>`).join('');
+        }
+
+        // --- Modified Setup ---
+        function setupApp() {
+            // Cleanup old listeners if any
+            if (unsubscribeTx) unsubscribeTx();
+            if (unsubscribeCats) unsubscribeCats();
+
+            console.log("Setting up App for user:", currentUser.uid);
+
+            // 1. Listen for Transactions
+            unsubscribeTx = db.collection('users').doc(currentUser.uid).collection('transactions')
+                // .orderBy('date', 'desc') // Removed to prevent "Missing Index" errors
+                .onSnapshot(snapshot => {
+                    // Check if data is local-only (pending)
+                    isUnsaved = snapshot.metadata.hasPendingWrites;
+                    console.log("Pending Writes?", isUnsaved);
+
+                    transactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                    // Visual feedback for sync status
+                    const statusEl = document.getElementById('sync-status');
+                    if (statusEl) {
+                        statusEl.innerText = isUnsaved ? "Syncing..." : "Saved";
+                        statusEl.style.color = isUnsaved ? "orange" : "green";
+                    }
+
+                    if (document.getElementById('view-dashboard').style.display !== 'none') renderDashboard();
+                    else renderTransactions();
+                }, error => {
+                    console.error("Sync Error:", error);
+                    alert("Unable to load data: " + error.message);
+                });
+
+            // 2. Listen for Categories
+            unsubscribeCats = db.collection('users').doc(currentUser.uid).collection('categories')
+                // .orderBy('createdAt', 'asc') // Removed for safety
+                .onSnapshot(snapshot => {
+                    // Seed defaults if empty and first load
+                    if (snapshot.empty && !categories.length) {
+                        // Check if we already tried seeding to avoid infinite loop (can use a flag or check metadata)
+                        // For simplicity: just seed
+                        seedDefaultCategories();
+                    }
+
+                    categories = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    renderCategoryDropdown();
+                    if (document.getElementById('category-modal-overlay').classList.contains('active')) renderCategoryList();
+                });
+        }
+
+        async function seedDefaultCategories() {
+            const batch = db.batch();
+            const catRef = db.collection('users').doc(currentUser.uid).collection('categories');
+
+            for (const name of defaultCategories) {
+                const doc = catRef.doc();
+                batch.set(doc, { name, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+            }
+
+            await batch.commit().catch(console.error);
+        }
+
+        // Ensure dropdown is populated on open logic override
+        // Ensure dropdown is populated on open logic override
+        const _openModal = openModal; // Store original reference if needed, but easier to just re-declare or append
+        function openModal(type = 'Expense') {
+            document.getElementById('modal-overlay').classList.add('active');
+
+            // Set Hidden Type
+            const hiddenInput = document.getElementById('t-type-hidden');
+            if (hiddenInput) {
+                hiddenInput.value = type;
+                console.log("Modal Type set to:", type);
+            }
+
+            // Toggle Vendor Field (Hide for Income)
+            const vendorGroup = document.getElementById('vendor-group');
+            if (vendorGroup) {
+                vendorGroup.style.display = type === 'Income' ? 'none' : 'block';
+            }
+
+            // Update Modal Title
+            const title = document.querySelector('#modal-overlay h3');
+            if (title) title.innerText = type === 'Income' ? 'Add Income' : 'Add Expense';
+
+            renderCategoryDropdown(type); // Ensure fresh list matches type
+        }
+
+        function closeModal() {
+            document.getElementById('modal-overlay').classList.remove('active');
+        }
+
+        async function addTransaction() {
+            console.log("Adding Transaction...");
+            if (!currentUser) {
+                alert("Error: You must be logged in to save transactions.");
+                return;
+            }
+
+            // Get Type from Hidden Input
+            const typeInput = document.getElementById('t-type-hidden');
+            const type = typeInput ? typeInput.value : 'Expense';
+
+            const desc = document.getElementById('t-desc').value;
+            const vendor = document.getElementById('t-vendor').value;
+            const amount = parseFloat(document.getElementById('t-amount').value);
+            const category = document.getElementById('t-category').value;
+            const date = document.getElementById('t-date').value;
+
+            if (isNaN(amount) || !date) {
+                alert("Please fill in Amount and Date");
+                return;
+            }
+
+            closeModal();
+
+            // Optimistic UI update could go here, but let's rely on Listener for now
+            try {
+                await db.collection('users').doc(currentUser.uid).collection('transactions').add({
+                    desc: desc || 'Unspecified',
+                    vendor: type === 'Income' ? '' : (vendor || ''), // Don't save vendor for Income
+                    amount,
+                    category: category,
+                    date,
+                    type,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+
+                // Reset form
+                document.getElementById('t-desc').value = '';
+                document.getElementById('t-vendor').value = '';
+                document.getElementById('t-amount').value = '';
+            } catch (e) {
+                console.error("Add Error:", e);
+                alert("Failed to save transaction. See console.");
+            }
+        }
+
+        async function deleteTransaction(txId) {
+            if (!confirm("Are you sure you want to delete this transaction?")) return;
+
+            try {
+                await db.collection('users').doc(currentUser.uid).collection('transactions').doc(txId).delete();
+            } catch (e) {
+                console.error("Delete Error:", e);
+            }
+        }
+
+        // --- Navigation ---
+        function switchTab(tabId) {
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            if (tabId === 'dashboard') document.querySelectorAll('.nav-item')[0].classList.add('active');
+            else document.querySelectorAll('.nav-item')[1].classList.add('active');
+
+            document.querySelectorAll('.view-section').forEach(el => el.style.display = 'none');
+            document.getElementById(`view-${tabId}`).style.display = 'block';
+
+            if (tabId === 'dashboard') renderDashboard();
+            else renderTransactions();
+        }
+
+        // --- Modal Handling ---
+        // (Moved above to utilize category rendering)
+
+        // --- Rendering ---
+        // --- Currency Handling ---
+        let currentCurrency = 'USD';
+
+        function updateCurrency() {
+            const select = document.getElementById('currency-select');
+            if (select) currentCurrency = select.value;
+
+            // Refresh views
+            const dashboardView = document.getElementById('view-dashboard');
+            if (dashboardView && dashboardView.style.display !== 'none') {
+                renderDashboard();
+            } else {
+                renderTransactions();
+            }
+        }
+
+        function formatMoney(amount) {
+            return new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: currentCurrency
+            }).format(amount);
+        }
+
+        // --- Rendering ---
+        function getFilteredTransactions(period, startVal, endVal) {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+
+            return transactions.filter(tx => {
+                const [y, m, d] = tx.date.split('-').map(Number);
+                const txDate = new Date(y, m - 1, d);
+
+                switch (period) {
+                    case 'today':
+                        return txDate.getTime() === now.getTime();
+                    case 'yesterday':
+                        const yest = new Date(now);
+                        yest.setDate(now.getDate() - 1);
+                        return txDate.getTime() === yest.getTime();
+                    case 'this-week': {
+                        const day = now.getDay();
+                        const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+                        const monday = new Date(now);
+                        monday.setDate(diff);
+                        const nextMonday = new Date(monday);
+                        nextMonday.setDate(monday.getDate() + 7);
+                        return txDate >= monday && txDate < nextMonday;
+                    }
+                    case 'last-week': {
+                        const day = now.getDay();
+                        const diff = now.getDate() - day + (day === 0 ? -6 : 1) - 7;
+                        const lastMon = new Date(now);
+                        lastMon.setDate(diff);
+                        const thisMon = new Date(lastMon);
+                        thisMon.setDate(lastMon.getDate() + 7);
+                        return txDate >= lastMon && txDate < thisMon;
+                    }
+                    case 'this-month':
+                        return txDate.getMonth() === now.getMonth() && txDate.getFullYear() === now.getFullYear();
+                    case 'last-month': {
+                        const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                        const lastMonthStart = new Date(thisMonth);
+                        lastMonthStart.setMonth(thisMonth.getMonth() - 1);
+                        return txDate >= lastMonthStart && txDate < thisMonth;
+                    }
+                    case 'this-year':
+                        return txDate.getFullYear() === now.getFullYear();
+                    case 'last-year':
+                        return txDate.getFullYear() === (now.getFullYear() - 1);
+                    case 'custom': {
+                        if (!startVal) return true;
+                        const s = new Date(startVal + 'T00:00:00');
+                        const e = endVal ? new Date(endVal + 'T23:59:59') : new Date('9999-12-31');
+                        return txDate >= s && txDate <= e;
+                    }
+                    default: // 'all'
+                        return true;
+                }
+            });
+        }
+
+        function renderTransactions() {
+            // Update Custom Date visibility
+            const period = document.getElementById('tx-period-select').value;
+            const customControls = document.getElementById('tx-custom-date-controls');
+            if (customControls) customControls.style.display = period === 'custom' ? 'flex' : 'none';
+
+            const startVal = document.getElementById('tx-custom-start').value;
+            const endVal = document.getElementById('tx-custom-end').value;
+
+            const filteredTxs = getFilteredTransactions(period, startVal, endVal);
+
+            const container = document.getElementById('transactions-container');
+            if (filteredTxs.length === 0) {
+                container.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-secondary);">No transactions found for this period.</div>';
+                return;
+            }
+
+            container.innerHTML = `
+                <table class="budget-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Description</th>
+                            <th>Vendor</th>
+                            <th>Category</th>
+                            <th>Type</th>
+                            <th class="col-money">Amount</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${filteredTxs.map(tx => `
+                        <tr>
+                            <td>${tx.date}</td>
+                            <td><div class="task-name">${tx.desc}</div></td>
+                            <td style="color: #666; font-size: 0.9em;">${tx.vendor || '-'}</td>
+                            <td><span class="tag ${tx.category}">${tx.category}</span></td>
+                            <td>${tx.type}</td>
+                            <td class="col-money" style="color: ${tx.type === 'Income' ? 'var(--success-color)' : 'inherit'}">
+                                ${tx.type === 'Expense' ? '-' : '+'} ${formatMoney(tx.amount)}
+                            </td>
+                            <td style="text-align: right;">
+                                <button class="delete-btn" onclick="deleteTransaction('${tx.id}')">🗑</button>
+                            </td>
+                        </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function exportToCSV() {
+            const period = document.getElementById('tx-period-select').value;
+            const startVal = document.getElementById('tx-custom-start').value;
+            const endVal = document.getElementById('tx-custom-end').value;
+
+            const data = getFilteredTransactions(period, startVal, endVal);
+
+            if (!data.length) {
+                alert("No transactions to export.");
+                return;
+            }
+
+            // CSV Header
+            const headers = ["Date", "Description", "Vendor", "Category", "Type", "Amount"];
+
+            // CSV Rows
+            const rows = data.map(tx => {
+                // Escape quotes
+                const desc = `"${(tx.desc || '').replace(/"/g, '""')}"`;
+                const vendor = `"${(tx.vendor || '').replace(/"/g, '""')}"`;
+                const category = `"${(tx.category || '').replace(/"/g, '""')}"`;
+
+                // Format Amount (+ or -)
+                const amt = tx.type === 'Expense' ? -tx.amount : tx.amount;
+
+                return [
+                    tx.date,
+                    desc,
+                    vendor,
+                    category,
+                    tx.type,
+                    amt.toFixed(2)
+                ].join(",");
+            });
+
+            // Combine
+            const csvContent = [headers.join(",")].concat(rows).join("\n");
+
+            // Download
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `transactions_${period}_${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // --- Dashboard & Charts (Same as before, just using new data source) ---
+        let categoryChartInstance = null;
+        let trendChartInstance = null;
+
+        // Dark Theme Defaults
+        if (window.Chart) {
+            Chart.defaults.color = '#94a3b8'; // Slate 400
+            Chart.defaults.borderColor = 'rgba(255, 255, 255, 0.05)';
+        }
+
+        // --- Filtering ---
+        function handlePeriodChange() {
+            const period = document.getElementById('period-select').value;
+            const customControls = document.getElementById('custom-date-controls');
+
+            if (customControls) {
+                customControls.style.display = period === 'custom' ? 'flex' : 'none';
+
+                // If Custom is selected but empty, default to today? Or just wait.
+                // If switching away from Custom, re-render immediately
+                if (period !== 'custom') renderDashboard();
+            }
+        }
+
+        function renderDashboard() {
+            const period = document.getElementById('period-select').value;
+            const now = new Date();
+            // Reset time to midnight for accurate comparisons
+            now.setHours(0, 0, 0, 0);
+
+            // Filter Logic
+            const filtered = transactions.filter(tx => {
+                const [y, m, d] = tx.date.split('-').map(Number);
+                const txDate = new Date(y, m - 1, d);
+
+                switch (period) {
+                    case 'today':
+                        return txDate.getTime() === now.getTime();
+
+                    case 'yesterday':
+                        const yest = new Date(now);
+                        yest.setDate(now.getDate() - 1);
+                        return txDate.getTime() === yest.getTime();
+
+                    case 'this-week': {
+                        const day = now.getDay(); // 0 (Sun) to 6 (Sat)
+                        // Assume Week starts on Sunday for simplicity, or Monday? Let's do Monday.
+                        const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+                        const monday = new Date(now);
+                        monday.setDate(diff);
+                        const nextMonday = new Date(monday);
+                        nextMonday.setDate(monday.getDate() + 7);
+                        return txDate >= monday && txDate < nextMonday;
+                    }
+
+                    case 'last-week': {
+                        const day = now.getDay();
+                        const diff = now.getDate() - day + (day === 0 ? -6 : 1) - 7;
+                        const lastMon = new Date(now);
+                        lastMon.setDate(diff);
+                        const thisMon = new Date(lastMon);
+                        thisMon.setDate(lastMon.getDate() + 7);
+                        return txDate >= lastMon && txDate < thisMon;
+                    }
+
+                    case 'this-month':
+                        return txDate.getMonth() === now.getMonth() && txDate.getFullYear() === now.getFullYear();
+
+                    case 'last-month': {
+                        const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                        // Create last month date safely
+                        const lastMonthStart = new Date(thisMonth);
+                        lastMonthStart.setMonth(thisMonth.getMonth() - 1);
+                        return txDate >= lastMonthStart && txDate < thisMonth;
+                    }
+
+                    case 'this-year':
+                        return txDate.getFullYear() === now.getFullYear();
+
+                    case 'last-year':
+                        return txDate.getFullYear() === (now.getFullYear() - 1);
+
+                    case 'custom': {
+                        const startVal = document.getElementById('custom-start').value;
+                        const endVal = document.getElementById('custom-end').value;
+
+                        if (!startVal) return true;
+
+                        const s = new Date(startVal + 'T00:00:00');
+                        const e = endVal ? new Date(endVal + 'T23:59:59') : new Date('9999-12-31');
+
+                        return txDate >= s && txDate <= e;
+                    }
+
+                    default: // 'all'
+                        return true;
+                }
+            });
+
+            // 1. Calculate Totals
+
+            // 1. Calculate Totals
+            const totalExpense = filtered.filter(t => t.type === 'Expense').reduce((sum, t) => sum + t.amount, 0);
+            const totalIncome = filtered.filter(t => t.type === 'Income').reduce((sum, t) => sum + t.amount, 0);
+            const net = totalIncome - totalExpense;
+
+            // 2. Update Bento Grid Cards
+            const expEl = document.getElementById('total-expenses');
+            if (expEl) expEl.innerText = formatMoney(totalExpense);
+
+            const incEl = document.getElementById('total-income');
+            if (incEl) incEl.innerText = formatMoney(totalIncome);
+
+            const netEl = document.getElementById('net-balance');
+            if (netEl) {
+                netEl.innerText = formatMoney(net);
+                netEl.style.color = net >= 0 ? 'var(--success-color)' : 'var(--danger-color)';
+            }
+
+            // 3. Render Component: Recent Activity (Mini List)
+            const recentList = document.getElementById('recent-transactions-list');
+            if (recentList) {
+                // Use 'filtered' if we want recent in this period, OR just 'transactions' for global recent?
+                // Usually global recent is better for "Recent Activity" card.
+                const recentTx = transactions.slice(0, 5);
+
+                if (recentTx.length === 0) {
+                    recentList.innerHTML = '<div style="color: var(--text-secondary); font-size: 0.9rem;">No recent activity</div>';
+                } else {
+                    recentList.innerHTML = recentTx.map(tx => `
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                            <div style="display: flex; flex-direction: column;">
+                                <span style="font-weight: 500; font-size: 0.9rem;">${tx.desc}</span>
+                                <span style="font-size: 0.75rem; color: var(--text-secondary);">${tx.vendor || tx.category}</span>
+                            </div>
+                            <span style="font-weight: 600; font-size: 0.9rem; color: ${tx.type === 'Income' ? 'var(--success-color)' : 'var(--text-primary)'}">
+                                ${tx.type === 'Expense' ? '-' : '+'} $${tx.amount.toFixed(0)}
+                            </span>
+                        </div>
+                    `).join('');
+                }
+            }
+
+            // 4. Update Charts using filtered data
+            // Prepare data for charts
+            const expenses = filtered.filter(t => t.type === 'Expense');
+            const categoryTotals = {};
+            expenses.forEach(tx => categoryTotals[tx.category] = (categoryTotals[tx.category] || 0) + tx.amount);
+
+            renderCategoryChart(categoryTotals);
+            renderTrendChart(expenses);
+        }
+
+        function formatMoney(amount) {
+            return '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function renderCategoryChart(dataObj) {
+            const ctx = document.getElementById('categoryChart').getContext('2d');
+            const labels = Object.keys(dataObj);
+            const data = Object.values(dataObj);
+
+            if (categoryChartInstance) categoryChartInstance.destroy();
+
+            categoryChartInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: data,
+                        backgroundColor: ['#579BFC', '#00D3E0', '#2D7FF9', '#A25DDC', '#00C875', '#7F8C8D'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right' } }
+                }
+            });
+        }
+
+        function renderTrendChart(expenses) {
+            const ctx = document.getElementById('trendChart').getContext('2d');
+            const dailyTotals = {};
+            expenses.forEach(tx => dailyTotals[tx.date] = (dailyTotals[tx.date] || 0) + tx.amount);
+
+            const labels = Object.keys(dailyTotals).sort();
+            const dataPoints = labels.map(date => dailyTotals[date]);
+
+            if (trendChartInstance) trendChartInstance.destroy();
+
+            trendChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Spending',
+                        data: dataPoints,
+                        backgroundColor: '#2D7FF9',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+    </script>
 </body>
 
 </html>
