@@ -770,8 +770,10 @@
                             <input type="date" id="tx-custom-end" class="pill-outline" onchange="renderTransactions()">
                         </div>
                         <div style="margin-left: auto; display: flex; gap: 8px;">
-                            <button class="pill-outline" onclick="importFromExcel()" title="Import Excel">Import</button>
-                            <input type="file" id="excel-upload" accept=".xlsx, .xls" style="display: none;" onchange="handleExcelFile(this)">
+                            <button class="pill-outline" onclick="importFromExcel()"
+                                title="Import Excel">Import</button>
+                            <input type="file" id="excel-upload" accept=".xlsx, .xls" style="display: none;"
+                                onchange="handleExcelFile(this)">
                             <button class="pill-outline" onclick="exportToCSV()" title="Export CSV">CSV</button>
                             <button class="pill-outline" onclick="exportToExcel()" title="Export Excel">Excel</button>
                             <button class="pill-outline" onclick="exportToPDF()" title="Export PDF">PDF</button>
@@ -1609,7 +1611,7 @@
                 </table>
             `;
         }
-        
+
         // --- Excel Import Logic ---
         function importFromExcel() {
             document.getElementById('excel-upload').click();
@@ -1623,18 +1625,18 @@
             input.value = '';
 
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = function (e) {
                 try {
                     const data = new Uint8Array(e.target.result);
                     const workbook = XLSX.read(data, { type: 'array' });
-                    
+
                     // Assume first sheet
                     const firstSheetName = workbook.SheetNames[0];
                     const worksheet = workbook.Sheets[firstSheetName];
-                    
+
                     // Convert to JSON
                     const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
-                    
+
                     if (jsonData.length === 0) {
                         alert("The Excel file appears to be empty.");
                         return;
@@ -1663,56 +1665,81 @@
             let batch = db.batch();
             let opCount = 0;
 
-            // Normalize Keys helper
-            const normalizeKey = (key) => key.trim().toLowerCase();
-            
-            for (const row of data) {
-                // Map columns
-                // Expected: Date, Description, Amount, Type, Category, Vendor
-                // Handle different casing
-                const normalizedRow = {};
-                for (const key in row) {
-                    normalizedRow[normalizeKey(key)] = row[key];
+            // Helper to match flexible column names
+            const findValue = (row, possibleKeys) => {
+                const rowKeys = Object.keys(row).map(k => k.trim().toLowerCase());
+                for (const key of possibleKeys) {
+                    const match = rowKeys.find(k => k === key);
+                    if (match) {
+                        // Find the original key to get value
+                        const originalKey = Object.keys(row).find(k => k.trim().toLowerCase() === match);
+                        return row[originalKey];
+                    }
                 }
+                return undefined;
+            };
 
-                // Construct Transaction Object
-                let dateStr = normalizedRow['date'];
-                let desc = normalizedRow['description'] || 'Imported Transaction';
-                let amount = parseFloat(normalizedRow['amount']);
-                let type = normalizedRow['type'] || 'Expense'; // Default to Expense
-                let category = normalizedRow['category'] || 'Other';
-                let vendor = normalizedRow['vendor'] || '';
+            for (const row of data) {
+                // Flexible Mapping
+                let dateStr = findValue(row, ['date', 'transaction date', 'tx date', 'txn date', 'day']);
+                let desc = findValue(row, ['description', 'desc', 'memo', 'details', 'name', 'merchant', 'narration']);
+                let amount = findValue(row, ['amount', 'cost', 'price', 'value', 'debit', 'total', 'transaction amount']);
+                let type = findValue(row, ['type', 'transaction type', 'dr/cr', 'drcr']);
+                let category = findValue(row, ['category', 'cat', 'expense category']);
+                let vendor = findValue(row, ['vendor', 'payer', 'payee']);
+
+                // If description is missing but vendor exists, use vendor as description
+                if (!desc && vendor) desc = vendor;
+                if (!desc) desc = 'Imported Transaction';
+
+                // Default Type to 'Expense'
+                if (!type) type = 'Expense';
+
+                // Ensure amount is float
+                if (amount) {
+                    if (typeof amount === 'string') {
+                        amount = parseFloat(amount.replace(/[^0-9.-]+/g, "")); // Remove currency symbols
+                    } else {
+                        amount = parseFloat(amount);
+                    }
+                }
 
                 // Basic Validation
                 if (!dateStr || isNaN(amount)) {
-                    console.warn("Skipping invalid row:", row);
+                    // console.warn("Skipping invalid row:", row); // Debug
                     errorCount++;
                     continue;
                 }
 
-                // Date Formatting (Handle Excel serial date if necessary, or string)
-                // If it's a number (Excel serial), convert it
-                if (typeof dateStr === 'number') {
-                     // Excel base date is 1899-12-30 usually
-                     const dateObj = new Date(Math.round((dateStr - 25569)*86400*1000));
-                     dateStr = dateObj.toISOString().split('T')[0];
-                } else {
-                    // Try to standardise 'MM/DD/YYYY' or 'DD/MM/YYYY' to YYYY-MM-DD ???
-                    // Let's assume input is parsable by Date or is already YYYY-MM-DD
-                     const d = new Date(dateStr);
-                     if (!isNaN(d.getTime())) {
-                         dateStr = d.toISOString().split('T')[0];
-                     } else {
-                         // Fallback or error
-                         console.warn("Invalid date format:", dateStr);
-                         errorCount++;
-                         continue;
-                     }
+                // Date Parsing
+                try {
+                    if (typeof dateStr === 'number') {
+                        // Excel serial date
+                        const dateObj = new Date(Math.round((dateStr - 25569) * 86400 * 1000));
+                        dateStr = dateObj.toISOString().split('T')[0];
+                    } else {
+                        // Try parsing string
+                        const d = new Date(dateStr);
+                        if (!isNaN(d.getTime())) {
+                            dateStr = d.toISOString().split('T')[0];
+                        } else {
+                            errorCount++;
+                            continue;
+                        }
+                    }
+                } catch (e) {
+                    errorCount++;
+                    continue;
                 }
-                
+
                 // Capitalize Type
-                type = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+                if (typeof type === 'string') {
+                    type = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+                }
                 if (type !== 'Income' && type !== 'Expense') type = 'Expense';
+
+                // If category is missing, default to 'Other'
+                if (!category) category = 'Other';
 
                 // Add to batch
                 const ref = db.collection('users').doc(currentUser.uid).collection('transactions').doc();
@@ -1722,14 +1749,13 @@
                     amount: amount,
                     type: type,
                     category: category,
-                    vendor: vendor,
+                    vendor: vendor || '',
                     createdAt: firebase.firestore.FieldValue.serverTimestamp()
                 });
-                
+
                 opCount++;
                 successCount++;
 
-                // Commit batch if full
                 if (opCount >= batchSize) {
                     await batch.commit();
                     batch = db.batch();
@@ -1737,18 +1763,22 @@
                 }
             }
 
-            // Commit remaining
             if (opCount > 0) {
                 await batch.commit();
             }
 
-            alert(`Import Complete!\nSuccess: ${successCount}\nSkipped/Error: ${errorCount}`);
-            // Re-render transactions to show newly imported data
-            renderTransactions();
-            // Also re-render dashboard if it's active, as it uses transactions data
-            const dashboardView = document.getElementById('view-dashboard');
-            if (dashboardView && dashboardView.style.display !== 'none') {
-                renderDashboard();
+            if (successCount === 0 && data.length > 0) {
+                // Show debug info if everything failed
+                const firstRowKeys = Object.keys(data[0]).join(", ");
+                alert(`Import Failed: 0 transactions imported.\n\nPlease check your column headers.\n\nFound headers in first row: \n${firstRowKeys}\n\nExpected identifiers for:\n- Date (e.g., 'Date', 'Transaction Date')\n- Amount (e.g., 'Amount', 'Cost')`);
+            } else {
+                alert(`Import Complete!\nSuccess: ${successCount}\nSkipped/Error: ${errorCount}`);
+                renderTransactions();
+                // Also re-render dashboard if it's active
+                const dashboardView = document.getElementById('view-dashboard');
+                if (dashboardView && dashboardView.style.display !== 'none') {
+                    renderDashboard();
+                }
             }
         }
 
