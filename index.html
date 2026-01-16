@@ -691,13 +691,13 @@
                             <div>
                                 <div style="font-size: 0.8rem; color: var(--text-secondary);">Income</div>
                                 <div class="big-number" id="total-income"
-                                    style="font-size: 1.8rem; color: var(--success-color);">$0.00</div>
+                                    style="font-size: 1.8rem; color: var(--success-color);">...</div>
                             </div>
                             <div style="height: 40px; width: 1px; background: var(--glass-border);"></div>
                             <div>
                                 <div style="font-size: 0.8rem; color: var(--text-secondary);">Expenses</div>
                                 <div class="big-number" id="total-expenses"
-                                    style="font-size: 1.8rem; color: var(--danger-color);">$0.00</div>
+                                    style="font-size: 1.8rem; color: var(--danger-color);">...</div>
                             </div>
                         </div>
                     </div>
@@ -708,7 +708,7 @@
                             <h3>Net Balance</h3>
                             <i class="icon" style="color: var(--accent-color);">Wallet</i>
                         </div>
-                        <div class="big-number" id="net-balance">$0.00</div>
+                        <div class="big-number" id="net-balance">...</div>
                     </div>
 
                     <!-- Card 3: Spending Trend (Chart) -->
@@ -999,6 +999,7 @@
                     currentUser = user;
                     authScreen.style.display = 'none'; // Hide Login
                     setupApp();
+                    syncUserCurrency(user); // Sync currency preference
                 } else {
                     currentUser = null;
                     authScreen.style.display = 'flex'; // Show Login
@@ -1449,6 +1450,35 @@
             }
         }
 
+        // --- Currency Sync on Load ---
+        async function syncUserCurrency(user) {
+            try {
+                const doc = await db.collection('users').doc(user.uid).get();
+                if (doc.exists) {
+                    const data = doc.data();
+                    if (data.currency && data.currency !== currentCurrency) {
+                        console.log("Syncing currency from cloud:", data.currency);
+                        currentCurrency = data.currency;
+                        localStorage.setItem('currency', currentCurrency);
+
+                        // Update Dropdown
+                        const select = document.getElementById('currency-select');
+                        if (select) select.value = currentCurrency;
+
+                        // Re-render
+                        const dashboardView = document.getElementById('view-dashboard');
+                        if (dashboardView && dashboardView.style.display !== 'none') {
+                            renderDashboard();
+                        } else {
+                            renderTransactions();
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Currency Sync Error:", e);
+            }
+        }
+
         function renderAdmin() {
             db.collection('users').orderBy('createdAt', 'desc').get().then(snapshot => {
                 const users = snapshot.docs.map(doc => doc.data());
@@ -1481,11 +1511,29 @@
 
         // --- Rendering ---
         // --- Currency Handling ---
-        let currentCurrency = 'USD';
+        let currentCurrency = localStorage.getItem('currency') || 'USD';
+
+        // Initialize dropdown on load
+        document.addEventListener('DOMContentLoaded', () => {
+            const select = document.getElementById('currency-select');
+            if (select) {
+                select.value = currentCurrency;
+            }
+        });
 
         function updateCurrency() {
             const select = document.getElementById('currency-select');
             if (select) currentCurrency = select.value;
+
+            // 1. Save to LocalStorage
+            localStorage.setItem('currency', currentCurrency);
+
+            // 2. Save to Firestore (if logged in)
+            if (currentUser) {
+                db.collection('users').doc(currentUser.uid).update({
+                    currency: currentCurrency
+                }).catch(err => console.error("Error saving currency pref:", err));
+            }
 
             // Refresh views
             const dashboardView = document.getElementById('view-dashboard');
@@ -2107,7 +2155,7 @@
                                 <span style="font-size: 0.75rem; color: var(--text-secondary);">${tx.vendor || tx.category}</span>
                             </div>
                             <span style="font-weight: 600; font-size: 0.9rem; color: ${tx.type === 'Income' ? 'var(--success-color)' : 'var(--text-primary)'}">
-                                ${tx.type === 'Expense' ? '-' : '+'} $${tx.amount.toFixed(0)}
+                                ${tx.type === 'Expense' ? '-' : '+'} ${formatMoney(tx.amount)}
                             </span>
                         </div>
                     `).join('');
@@ -2124,9 +2172,7 @@
             renderTrendChart(expenses);
         }
 
-        function formatMoney(amount) {
-            return '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        }
+
 
         function renderCategoryChart(dataObj) {
             const ctx = document.getElementById('categoryChart').getContext('2d');
