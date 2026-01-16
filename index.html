@@ -1634,15 +1634,57 @@
                     const firstSheetName = workbook.SheetNames[0];
                     const worksheet = workbook.Sheets[firstSheetName];
 
-                    // Convert to JSON
-                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+                    // 1. Get all data as arrays to find the header row
+                    const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
 
-                    if (jsonData.length === 0) {
+                    if (!rawData || rawData.length === 0) {
                         alert("The Excel file appears to be empty.");
                         return;
                     }
 
-                    processExcelData(jsonData);
+                    // 2. Scan first 10 rows for Header Candidates
+                    let headerRowIndex = 0;
+                    let maxMatches = 0;
+
+                    const expectedHeaders = ['date', 'amount', 'category', 'description', 'vendor', 'type', 'cost', 'payee'];
+
+                    // Check up to first 20 rows
+                    for (let i = 0; i < Math.min(rawData.length, 20); i++) {
+                        const row = rawData[i];
+                        if (!row || !Array.isArray(row)) continue;
+
+                        let matches = 0;
+                        const rowStr = row.map(c => String(c).toLowerCase().trim());
+
+                        // Count how many expected headers are in this row
+                        for (const h of expectedHeaders) {
+                            if (rowStr.some(cell => cell.includes(h))) matches++;
+                        }
+
+                        // Heuristic: If we find at least 2 matches, it's a strong candidate.
+                        // We take the one with MOST matches.
+                        if (matches > maxMatches) {
+                            maxMatches = matches;
+                            headerRowIndex = i;
+                        }
+                    }
+
+                    console.log(`Detected Header Row at index ${headerRowIndex} with ${maxMatches} matches.`);
+
+                    // 3. Convert to JSON starting from the detected header row
+                    // We can use 'range' option in sheet_to_json
+                    // Note: invalidates reference based utilities, but okay for direct parsing
+                    // Better: just slice the array if we already have it?
+                    // Warning: sheet_to_json with objects is better for column mapping.
+
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { range: headerRowIndex, defval: "" });
+
+                    if (jsonData.length === 0) {
+                        alert("No data found below the header row.");
+                        return;
+                    }
+
+                    processExcelData(jsonData, rawData[headerRowIndex]);
                 } catch (error) {
                     console.error("Excel Parse Error:", error);
                     alert("Failed to parse Excel file. Please ensure it is a valid .xlsx or .xls file.");
@@ -1651,7 +1693,7 @@
             reader.readAsArrayBuffer(file);
         }
 
-        async function processExcelData(data) {
+        async function processExcelData(data, foundHeaders) {
             if (!currentUser) {
                 alert("You must be logged in to import transactions.");
                 return;
