@@ -770,6 +770,8 @@
                             <input type="date" id="tx-custom-end" class="pill-outline" onchange="renderTransactions()">
                         </div>
                         <div style="margin-left: auto; display: flex; gap: 8px;">
+                            <button class="pill-outline" onclick="importFromExcel()" title="Import Excel">Import</button>
+                            <input type="file" id="excel-upload" accept=".xlsx, .xls" style="display: none;" onchange="handleExcelFile(this)">
                             <button class="pill-outline" onclick="exportToCSV()" title="Export CSV">CSV</button>
                             <button class="pill-outline" onclick="exportToExcel()" title="Export Excel">Excel</button>
                             <button class="pill-outline" onclick="exportToPDF()" title="Export PDF">PDF</button>
@@ -1598,14 +1600,156 @@
                             <td class="col-money" style="color: ${tx.type === 'Income' ? 'var(--success-color)' : 'inherit'}">
                                 ${tx.type === 'Expense' ? '-' : '+'} ${formatMoney(tx.amount)}
                             </td>
-                            <td style="text-align: right;">
-                                <button class="delete-btn" onclick="deleteTransaction('${tx.id}')">🗑</button>
+                            <td>
+                                <button class="pill-outline" style="padding: 4px 8px; font-size: 0.8rem; color: var(--danger-color); border-color: var(--glass-border);" onclick="deleteTransaction('${tx.id}')">×</button>
                             </td>
                         </tr>
                         `).join('')}
                     </tbody>
                 </table>
             `;
+        }
+        
+        // --- Excel Import Logic ---
+        function importFromExcel() {
+            document.getElementById('excel-upload').click();
+        }
+
+        function handleExcelFile(input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            // Reset input so same file can be selected again if needed
+            input.value = '';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    
+                    // Assume first sheet
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    
+                    // Convert to JSON
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+                    
+                    if (jsonData.length === 0) {
+                        alert("The Excel file appears to be empty.");
+                        return;
+                    }
+
+                    processExcelData(jsonData);
+                } catch (error) {
+                    console.error("Excel Parse Error:", error);
+                    alert("Failed to parse Excel file. Please ensure it is a valid .xlsx or .xls file.");
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        async function processExcelData(data) {
+            if (!currentUser) {
+                alert("You must be logged in to import transactions.");
+                return;
+            }
+
+            if (!confirm(`Found ${data.length} rows. Do you want to import them?`)) return;
+
+            let successCount = 0;
+            let errorCount = 0;
+            const batchSize = 500; // Firestore batch limit
+            let batch = db.batch();
+            let opCount = 0;
+
+            // Normalize Keys helper
+            const normalizeKey = (key) => key.trim().toLowerCase();
+            
+            for (const row of data) {
+                // Map columns
+                // Expected: Date, Description, Amount, Type, Category, Vendor
+                // Handle different casing
+                const normalizedRow = {};
+                for (const key in row) {
+                    normalizedRow[normalizeKey(key)] = row[key];
+                }
+
+                // Construct Transaction Object
+                let dateStr = normalizedRow['date'];
+                let desc = normalizedRow['description'] || 'Imported Transaction';
+                let amount = parseFloat(normalizedRow['amount']);
+                let type = normalizedRow['type'] || 'Expense'; // Default to Expense
+                let category = normalizedRow['category'] || 'Other';
+                let vendor = normalizedRow['vendor'] || '';
+
+                // Basic Validation
+                if (!dateStr || isNaN(amount)) {
+                    console.warn("Skipping invalid row:", row);
+                    errorCount++;
+                    continue;
+                }
+
+                // Date Formatting (Handle Excel serial date if necessary, or string)
+                // If it's a number (Excel serial), convert it
+                if (typeof dateStr === 'number') {
+                     // Excel base date is 1899-12-30 usually
+                     const dateObj = new Date(Math.round((dateStr - 25569)*86400*1000));
+                     dateStr = dateObj.toISOString().split('T')[0];
+                } else {
+                    // Try to standardise 'MM/DD/YYYY' or 'DD/MM/YYYY' to YYYY-MM-DD ???
+                    // Let's assume input is parsable by Date or is already YYYY-MM-DD
+                     const d = new Date(dateStr);
+                     if (!isNaN(d.getTime())) {
+                         dateStr = d.toISOString().split('T')[0];
+                     } else {
+                         // Fallback or error
+                         console.warn("Invalid date format:", dateStr);
+                         errorCount++;
+                         continue;
+                     }
+                }
+                
+                // Capitalize Type
+                type = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+                if (type !== 'Income' && type !== 'Expense') type = 'Expense';
+
+                // Add to batch
+                const ref = db.collection('users').doc(currentUser.uid).collection('transactions').doc();
+                batch.set(ref, {
+                    date: dateStr,
+                    desc: desc,
+                    amount: amount,
+                    type: type,
+                    category: category,
+                    vendor: vendor,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                
+                opCount++;
+                successCount++;
+
+                // Commit batch if full
+                if (opCount >= batchSize) {
+                    await batch.commit();
+                    batch = db.batch();
+                    opCount = 0;
+                }
+            }
+
+            // Commit remaining
+            if (opCount > 0) {
+                await batch.commit();
+            }
+
+            alert(`Import Complete!\nSuccess: ${successCount}\nSkipped/Error: ${errorCount}`);
+            // Re-render transactions to show newly imported data
+            renderTransactions();
+            // Also re-render dashboard if it's active, as it uses transactions data
+            const dashboardView = document.getElementById('view-dashboard');
+            if (dashboardView && dashboardView.style.display !== 'none') {
+                renderDashboard();
+            }
         }
 
         function exportToCSV() {
